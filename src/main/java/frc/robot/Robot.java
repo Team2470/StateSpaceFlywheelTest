@@ -4,6 +4,11 @@
 
 package frc.robot;
 
+import com.revrobotics.CANSparkMax;
+import com.revrobotics.RelativeEncoder;
+import com.revrobotics.CANSparkMaxLowLevel.MotorType;
+import com.revrobotics.CANSparkMaxLowLevel.PeriodicFrame;
+
 import edu.wpi.first.math.Nat;
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.controller.LinearQuadraticRegulator;
@@ -13,28 +18,22 @@ import edu.wpi.first.math.system.LinearSystem;
 import edu.wpi.first.math.system.LinearSystemLoop;
 import edu.wpi.first.math.system.plant.LinearSystemId;
 import edu.wpi.first.math.util.Units;
-import edu.wpi.first.wpilibj.Encoder;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.TimedRobot;
-import edu.wpi.first.wpilibj.motorcontrol.MotorController;
-import edu.wpi.first.wpilibj.motorcontrol.PWMSparkMax;
 
 /**
  * This is a sample program to demonstrate how to use a state-space controller to control a
  * flywheel.
  */
 public class Robot extends TimedRobot {
-  private static final int kMotorPort = 0;
-  private static final int kEncoderAChannel = 0;
-  private static final int kEncoderBChannel = 1;
   private static final int kJoystickPort = 0;
   private static final double kSpinupRadPerSec = Units.rotationsPerMinuteToRadiansPerSecond(500.0);
 
   // Volts per (radian per second)
-  private static final double kFlywheelKv = 0.023;
+  private static final double kFlywheelKv = 0.020163;
 
   // Volts per (radian per second squared)
-  private static final double kFlywheelKa = 0.001;
+  private static final double kFlywheelKa = 0.0011182;
   // The plant holds a state-space model of our flywheel. This system has the following properties:
   //
   // States: [velocity], in radians per second.
@@ -68,40 +67,59 @@ public class Robot extends TimedRobot {
   private final LinearSystemLoop<N1, N1, N1> m_loop =
       new LinearSystemLoop<>(m_flywheelPlant, m_controller, m_observer, 12.0, 0.020);
 
-  // An encoder set up to measure flywheel velocity in radians per second.
-  private final Encoder m_encoder = new Encoder(kEncoderAChannel, kEncoderBChannel);
-
-  private final MotorController m_motor = new PWMSparkMax(kMotorPort);
+  private final CANSparkMax m_shooterLeader;
+  private final CANSparkMax m_shooterFollower;
+  private final RelativeEncoder m_encoder;
 
   // A joystick to read the trigger from.
   private final Joystick m_joystick = new Joystick(kJoystickPort);
 
+  public Robot() {
+    m_shooterLeader = new CANSparkMax(2, MotorType.kBrushless);
+    m_shooterFollower = new CANSparkMax(3, MotorType.kBrushless);
+    m_shooterFollower.follow(m_shooterLeader, true);
+    m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus0, 100);
+    m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus1, 500);
+    m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus2, 500);
+
+    m_shooterLeader.setInverted(true);
+    m_shooterFollower.setInverted(true);
+    m_encoder = m_shooterLeader.getEncoder();
+
+
+    m_shooterLeader.setSmartCurrentLimit(40);
+    m_shooterFollower.setSmartCurrentLimit(40);
+    //m_shooterLeader.enableVoltageCompensation(10);
+    //m_shooterFollower.enableVoltageCompensation(10);
+  }  
+
   @Override
   public void robotInit() {
     // We go 2 pi radians per 4096 clicks.
-    m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
+    //m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
+    m_encoder.setVelocityConversionFactor(2.0 * Math.PI / 4096.0);
   }
 
   @Override
   public void teleopInit() {
     // Reset our loop to make sure it's in a known state.
-    m_loop.reset(VecBuilder.fill(m_encoder.getRate()));
+    m_loop.reset(VecBuilder.fill(m_encoder.getVelocity()));
   }
 
   @Override
   public void teleopPeriodic() {
     // Sets the target speed of our flywheel. This is similar to setting the setpoint of a
     // PID controller.
-    if (m_joystick.getTriggerPressed()) {
+    if (m_joystick.getRawButtonPressed(1)) {
       // We just pressed the trigger, so let's set our next reference
       m_loop.setNextR(VecBuilder.fill(kSpinupRadPerSec));
-    } else if (m_joystick.getTriggerReleased()) {
+    } else if (m_joystick.getRawButtonReleased(1)) {
       // We just released the trigger, so let's spin down
       m_loop.setNextR(VecBuilder.fill(0.0));
     }
 
     // Correct our Kalman filter's state vector estimate with encoder data.
-    m_loop.correct(VecBuilder.fill(m_encoder.getRate()));
+    m_loop.correct(VecBuilder.fill(m_encoder.getVelocity()));
 
     // Update our LQR to generate new voltage commands and use the voltages to predict the next
     // state with out Kalman filter.
@@ -111,6 +129,6 @@ public class Robot extends TimedRobot {
     // voltage = duty cycle * battery voltage, so
     // duty cycle = voltage / battery voltage
     double nextVoltage = m_loop.getU(0);
-    m_motor.setVoltage(nextVoltage);
+    m_shooterLeader.setVoltage(nextVoltage);
   }
 }
