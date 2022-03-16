@@ -6,6 +6,7 @@ package frc.robot;
 
 import com.revrobotics.CANSparkMax;
 import com.revrobotics.RelativeEncoder;
+import com.revrobotics.CANSparkMax.IdleMode;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 import com.revrobotics.CANSparkMaxLowLevel.PeriodicFrame;
 
@@ -20,6 +21,7 @@ import edu.wpi.first.math.system.plant.LinearSystemId;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.TimedRobot;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 /**
  * This is a sample program to demonstrate how to use a state-space controller to control a
@@ -27,10 +29,13 @@ import edu.wpi.first.wpilibj.TimedRobot;
  */
 public class Robot extends TimedRobot {
   private static final int kJoystickPort = 0;
-  private static final double kSpinupRadPerSec = Units.rotationsPerMinuteToRadiansPerSecond(500.0);
+  private static final double kSpinupRadPerSec1000 = Units.rotationsPerMinuteToRadiansPerSecond(1000.0);
+  private static final double kSpinupRadPerSec2000 = Units.rotationsPerMinuteToRadiansPerSecond(2000.0);
+  private static final double kSpinupRadPerSec2500 = Units.rotationsPerMinuteToRadiansPerSecond(2500.0);
+  private static final double kSpinupRadPerSec3000 = Units.rotationsPerMinuteToRadiansPerSecond(3000.0);
 
   // Volts per (radian per second)
-  private static final double kFlywheelKv = 0.020163;
+  private static final double kFlywheelKv = 0.020163 * 1.0335654; // 0.020839779
 
   // Volts per (radian per second squared)
   private static final double kFlywheelKa = 0.0011182;
@@ -59,7 +64,7 @@ public class Robot extends TimedRobot {
   private final LinearQuadraticRegulator<N1, N1, N1> m_controller =
       new LinearQuadraticRegulator<>(
           m_flywheelPlant,
-          VecBuilder.fill(8.0), // Velocity error tolerance
+          VecBuilder.fill(8.0), // Velocity error tolerance. Default 8
           VecBuilder.fill(12.0), // Control effort (voltage) tolerance
           0.020);
 
@@ -67,16 +72,22 @@ public class Robot extends TimedRobot {
   private final LinearSystemLoop<N1, N1, N1> m_loop =
       new LinearSystemLoop<>(m_flywheelPlant, m_controller, m_observer, 12.0, 0.020);
 
-  private final CANSparkMax m_shooterLeader;
-  private final CANSparkMax m_shooterFollower;
-  private final RelativeEncoder m_encoder;
+  private CANSparkMax m_shooterLeader;
+  private CANSparkMax m_shooterFollower;
+  private RelativeEncoder m_encoder;
 
   // A joystick to read the trigger from.
   private final Joystick m_joystick = new Joystick(kJoystickPort);
 
-  public Robot() {
+  @Override
+  public void robotInit() {
+    // We go 2 pi radians per 4096 clicks.
+    //m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
+    //m_encoder.setVelocityConversionFactor(2.0 * Math.PI / 4096.0);
     m_shooterLeader = new CANSparkMax(2, MotorType.kBrushless);
+    m_shooterLeader.restoreFactoryDefaults();
     m_shooterFollower = new CANSparkMax(3, MotorType.kBrushless);
+    m_shooterFollower.restoreFactoryDefaults();
     m_shooterFollower.follow(m_shooterLeader, true);
     m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus0, 100);
     m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus1, 500);
@@ -91,35 +102,53 @@ public class Robot extends TimedRobot {
     m_shooterFollower.setSmartCurrentLimit(40);
     //m_shooterLeader.enableVoltageCompensation(10);
     //m_shooterFollower.enableVoltageCompensation(10);
-  }  
 
-  @Override
-  public void robotInit() {
-    // We go 2 pi radians per 4096 clicks.
-    //m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
-    m_encoder.setVelocityConversionFactor(2.0 * Math.PI / 4096.0);
+    m_shooterLeader.setIdleMode(IdleMode.kCoast);
+    m_shooterFollower.setIdleMode(IdleMode.kCoast);
+
+    m_controller.latencyCompensate(m_flywheelPlant, 0.02, 0.025);
   }
 
   @Override
   public void teleopInit() {
     // Reset our loop to make sure it's in a known state.
-    m_loop.reset(VecBuilder.fill(m_encoder.getVelocity()));
+    m_loop.reset(VecBuilder.fill(Units.rotationsPerMinuteToRadiansPerSecond(m_encoder.getVelocity())));
+    targetSpeedRadS = 0;
+    SmartDashboard.putNumber("Shooter Control RPM", 0);
+
+    m_shooterLeader.setIdleMode(IdleMode.kCoast);
+    m_shooterFollower.setIdleMode(IdleMode.kCoast);
+
   }
 
-  @Override
+  private double targetSpeedRadS = 0;
+
+  public void teleopPeriodicTEst() {
+    m_shooterLeader.setVoltage(4);
+    double shooterRadS = Units.rotationsPerMinuteToRadiansPerSecond(m_encoder.getVelocity());
+
+    SmartDashboard.putNumber("Shooter RAD/S", shooterRadS);
+    SmartDashboard.putNumber("Shooter Target RAD/S", targetSpeedRadS);
+    SmartDashboard.putNumber("Shooter RPM", Units.radiansPerSecondToRotationsPerMinute(shooterRadS));
+    SmartDashboard.putNumber("Shooter Leader getAppliedOutput", m_shooterLeader.getAppliedOutput());
+  }
+
+  // @Override
   public void teleopPeriodic() {
     // Sets the target speed of our flywheel. This is similar to setting the setpoint of a
     // PID controller.
     if (m_joystick.getRawButtonPressed(1)) {
       // We just pressed the trigger, so let's set our next reference
-      m_loop.setNextR(VecBuilder.fill(kSpinupRadPerSec));
+      targetSpeedRadS = Units.rotationsPerMinuteToRadiansPerSecond(SmartDashboard.getNumber("Shooter Control RPM", 0));
     } else if (m_joystick.getRawButtonReleased(1)) {
       // We just released the trigger, so let's spin down
-      m_loop.setNextR(VecBuilder.fill(0.0));
+      targetSpeedRadS = 0;
     }
+    m_loop.setNextR(VecBuilder.fill(targetSpeedRadS));
 
     // Correct our Kalman filter's state vector estimate with encoder data.
-    m_loop.correct(VecBuilder.fill(m_encoder.getVelocity()));
+    double shooterRadS = Units.rotationsPerMinuteToRadiansPerSecond(m_encoder.getVelocity());
+    m_loop.correct(VecBuilder.fill(shooterRadS));
 
     // Update our LQR to generate new voltage commands and use the voltages to predict the next
     // state with out Kalman filter.
@@ -130,5 +159,21 @@ public class Robot extends TimedRobot {
     // duty cycle = voltage / battery voltage
     double nextVoltage = m_loop.getU(0);
     m_shooterLeader.setVoltage(nextVoltage);
+
+    double errorRadS = shooterRadS - targetSpeedRadS;
+    SmartDashboard.putNumber("Shooter Next Voltage", nextVoltage);
+    SmartDashboard.putNumber("Shooter RAD/S", shooterRadS);
+    SmartDashboard.putNumber("Shooter Target RAD/S", targetSpeedRadS);
+    SmartDashboard.putNumber("Shooter Error RAD/S", errorRadS);
+    SmartDashboard.putNumber("Shooter RPM", Units.radiansPerSecondToRotationsPerMinute(shooterRadS));
+    SmartDashboard.putNumber("Shooter Target RPM", Units.radiansPerSecondToRotationsPerMinute(targetSpeedRadS));
+    SmartDashboard.putNumber("Shooter Error RPM", Units.radiansPerSecondToRotationsPerMinute(errorRadS));
+    SmartDashboard.putNumber("getCountsPerRevolution", m_encoder.getCountsPerRevolution());
+    SmartDashboard.putNumber("Shooter Leader getAppliedOutput", m_shooterLeader.getAppliedOutput());
+
+    double precentError = (targetSpeedRadS - shooterRadS)/targetSpeedRadS * 100;
+    SmartDashboard.putNumber("Shooter Precent Error", precentError);
+
+
   }
 }
