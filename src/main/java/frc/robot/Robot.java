@@ -20,6 +20,7 @@ import edu.wpi.first.math.system.plant.LinearSystemId;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.TimedRobot;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 /**
  * This is a sample program to demonstrate how to use a state-space controller to control a
@@ -27,13 +28,13 @@ import edu.wpi.first.wpilibj.TimedRobot;
  */
 public class Robot extends TimedRobot {
   private static final int kJoystickPort = 0;
-  private static final double kSpinupRadPerSec = Units.rotationsPerMinuteToRadiansPerSecond(500.0);
+  private static final double kSpinupRadPerSec = Units.rotationsPerMinuteToRadiansPerSecond(4500.0);
 
   // Volts per (radian per second)
-  private static final double kFlywheelKv = 0.020163;
+  private static final double kFlywheelKv = 0.020507;
 
   // Volts per (radian per second squared)
-  private static final double kFlywheelKa = 0.0011182;
+  private static final double kFlywheelKa = 0.00096431;
   // The plant holds a state-space model of our flywheel. This system has the following properties:
   //
   // States: [velocity], in radians per second.
@@ -75,8 +76,10 @@ public class Robot extends TimedRobot {
   private final Joystick m_joystick = new Joystick(kJoystickPort);
 
   public Robot() {
-    m_shooterLeader = new CANSparkMax(2, MotorType.kBrushless);
+    m_shooterLeader = new CANSparkMax(1, MotorType.kBrushless);
     m_shooterFollower = new CANSparkMax(3, MotorType.kBrushless);
+    m_shooterLeader.restoreFactoryDefaults();
+    m_shooterFollower.restoreFactoryDefaults();
     m_shooterFollower.follow(m_shooterLeader, true);
     m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus0, 100);
     m_shooterFollower.setPeriodicFramePeriod(PeriodicFrame.kStatus1, 500);
@@ -86,7 +89,6 @@ public class Robot extends TimedRobot {
     m_shooterFollower.setInverted(true);
     m_encoder = m_shooterLeader.getEncoder();
 
-
     m_shooterLeader.setSmartCurrentLimit(40);
     m_shooterFollower.setSmartCurrentLimit(40);
     //m_shooterLeader.enableVoltageCompensation(10);
@@ -95,32 +97,40 @@ public class Robot extends TimedRobot {
 
   @Override
   public void robotInit() {
+    // Adjust our LQR's controller for 25 ms of sensor input delay. We
+    // provide the linear system, discretization timestep, and the sensor
+    // input delay as arguments.
+    m_controller.latencyCompensate(m_flywheelPlant, 0.02, 0.025);
     // We go 2 pi radians per 4096 clicks.
-    //m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
-    m_encoder.setVelocityConversionFactor(2.0 * Math.PI / 4096.0);
+    // m_encoder.setDistancePerPulse(2.0 * Math.PI / 4096.0);
+    // m_encoder.setVelocityConversionFactor(2.0 * Math.PI / 4096.0);
   }
 
   @Override
   public void teleopInit() {
     // Reset our loop to make sure it's in a known state.
-    m_loop.reset(VecBuilder.fill(m_encoder.getVelocity()));
+    m_loop.reset(VecBuilder.fill(Units.rotationsPerMinuteToRadiansPerSecond(m_encoder.getVelocity())));
+    target_rad_per_seccond = 0;
   }
-
+  double target_rad_per_seccond = 0;
   @Override
   public void teleopPeriodic() {
     // Sets the target speed of our flywheel. This is similar to setting the setpoint of a
     // PID controller.
     if (m_joystick.getRawButtonPressed(1)) {
       // We just pressed the trigger, so let's set our next reference
-      m_loop.setNextR(VecBuilder.fill(kSpinupRadPerSec));
+      target_rad_per_seccond = kSpinupRadPerSec;
     } else if (m_joystick.getRawButtonReleased(1)) {
       // We just released the trigger, so let's spin down
-      m_loop.setNextR(VecBuilder.fill(0.0));
+      target_rad_per_seccond = 0;
     }
+    m_loop.setNextR(VecBuilder.fill(target_rad_per_seccond));
 
     // Correct our Kalman filter's state vector estimate with encoder data.
-    m_loop.correct(VecBuilder.fill(m_encoder.getVelocity()));
+    double shooterRadPerSeccond = Units.rotationsPerMinuteToRadiansPerSecond( m_encoder.getVelocity());
 
+    m_loop.correct(VecBuilder.fill(shooterRadPerSeccond));
+    
     // Update our LQR to generate new voltage commands and use the voltages to predict the next
     // state with out Kalman filter.
     m_loop.predict(0.020);
@@ -130,5 +140,14 @@ public class Robot extends TimedRobot {
     // duty cycle = voltage / battery voltage
     double nextVoltage = m_loop.getU(0);
     m_shooterLeader.setVoltage(nextVoltage);
+
+    double error = target_rad_per_seccond - shooterRadPerSeccond;
+    SmartDashboard.putNumber("Shooter error", error);
+    SmartDashboard.putNumber("Shooter RPM error", Units.radiansPerSecondToRotationsPerMinute(error));
+    SmartDashboard.putNumber("Shooter Next voltage", nextVoltage);
+    SmartDashboard.putNumber("Shooter rad per seccond", shooterRadPerSeccond);
+    SmartDashboard.putNumber("Shooter RPM", Units.radiansPerSecondToRotationsPerMinute(shooterRadPerSeccond));
+    SmartDashboard.putNumber("Shooter target speed", target_rad_per_seccond);
+    SmartDashboard.putNumber("Shooter target RPN", Units.radiansPerSecondToRotationsPerMinute(target_rad_per_seccond));
   }
 }
